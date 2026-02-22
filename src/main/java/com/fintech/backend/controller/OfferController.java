@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.fintech.backend.model.Investment;
@@ -100,14 +101,22 @@ public class OfferController {
 
     @PatchMapping("/{id}/status")
     public ResponseEntity<Offer> updateStatus(@PathVariable String id, @RequestBody StatusUpdate body) {
-        return repository.findById(id).map(existing -> {
+        return (ResponseEntity<Offer>) repository.findById(id).map(existing -> {
             if (body.status != null) existing.setStatus(body.status);
             if (body.note != null) existing.setNote(body.note);
             existing.setUpdatedAt(Instant.now());
             Offer savedOffer = repository.save(existing);
 
             if ("accepted".equalsIgnoreCase(body.status)) {
+                // 🔐 Проверка: уже есть активная инвестиция?
+                boolean hasActive = investmentRepository
+                        .existsByStartupIdAndStatus(savedOffer.getStartupId(), "active");
 
+                if (hasActive) {
+                    return ResponseEntity.badRequest().body(
+                            Map.of("error", "Startup already has an active investment")
+                    );
+                }
                 Optional<Startup> optStartup = startupsRepository.findById(savedOffer.getStartupId());
                 if (optStartup.isEmpty()) return ResponseEntity.ok(savedOffer);
 
