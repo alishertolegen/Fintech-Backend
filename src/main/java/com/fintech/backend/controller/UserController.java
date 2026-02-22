@@ -1,7 +1,9 @@
 package com.fintech.backend.controller;
 
 import com.fintech.backend.model.User;
+import com.fintech.backend.model.Investor;
 import com.fintech.backend.repository.UserRepository;
+import com.fintech.backend.repository.InvestorRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
@@ -18,12 +20,14 @@ import java.util.stream.Collectors;
 public class UserController {
 
     private final UserRepository repo;
+    private final InvestorRepository investorRepository;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
     private final JwtUtil jwtUtil; // <-- добавлено
 
-    public UserController(UserRepository repo, JwtUtil jwtUtil) {
+    public UserController(UserRepository repo, JwtUtil jwtUtil, InvestorRepository investorRepository) {
         this.repo = repo;
         this.jwtUtil = jwtUtil; // <-- назначаем
+        this.investorRepository = investorRepository;
     }
 
 
@@ -38,6 +42,19 @@ public class UserController {
         public String avatarUrl;
         public String phone;
         public String location;
+
+        // вложенный профиль инвестора (опционально)
+        public InvestorProfile investorProfile;
+
+        public static class InvestorProfile {
+            public String legalName;
+            public String type;
+            public Integer minCheck;
+            public Integer maxCheck;
+            public List<String> preferredIndustries;
+            public List<String> preferredStages;
+            public String website;
+        }
     }
 
     public static class UpdateUserRequest {
@@ -108,7 +125,55 @@ public class UserController {
 
         try {
             User saved = repo.save(u);
-            // Возвращаем единый объект: message + user
+
+            // Если роль investor и пришёл профиль — пытаемся создать Investor
+            if ("investor".equalsIgnoreCase(role) && req.investorProfile != null) {
+                try {
+                    Investor inv = new Investor();
+                    inv.setUserId(saved.getId());
+                    inv.setLegalName(
+                            (req.investorProfile.legalName == null || req.investorProfile.legalName.isBlank())
+                                    ? saved.getName()
+                                    : req.investorProfile.legalName
+                    );
+                    inv.setType(req.investorProfile.type);
+                    inv.setMinCheck(req.investorProfile.minCheck);
+                    inv.setMaxCheck(req.investorProfile.maxCheck);
+                    inv.setPreferredIndustries(req.investorProfile.preferredIndustries);
+                    inv.setPreferredStages(req.investorProfile.preferredStages);
+                    inv.setWebsite(req.investorProfile.website);
+                    inv.setCreatedAt(Instant.now());
+                    inv.setUpdatedAt(Instant.now());
+                    Investor savedInv = investorRepository.save(inv);
+
+                    // Возвращаем единый объект: message + user + investor
+                    return ResponseEntity
+                            .status(201)
+                            .body(Map.of(
+                                    "message", "Тіркелу сәтті өтті",
+                                    "code", "REGISTERED",
+                                    "user", sanitize(saved),
+                                    "investor", savedInv
+                            ));
+                } catch (Exception invEx) {
+                    // Если при создании профиля инвестора что-то пошло не так — откатываем user
+                    invEx.printStackTrace();
+                    try {
+                        repo.deleteById(saved.getId());
+                    } catch (Exception delEx) {
+                        delEx.printStackTrace();
+                        // Если откат не удался — сообщаем об ошибке, но возвращаем 500
+                        return ResponseEntity
+                                .status(500)
+                                .body(Map.of("message", "Пайдаланушы сақталды, бірақ инвестор профилін жасау сәтсіз аяқталды. Роллбек сәтсіз.", "code", "INVESTOR_CREATE_ROLLBACK_FAILED"));
+                    }
+                    return ResponseEntity
+                            .status(500)
+                            .body(Map.of("message", "Инвестор профилін жасау кезінде қате орын алды", "code", "INVESTOR_CREATE_FAILED"));
+                }
+            }
+
+            // Без инвестор-профиля — обычный ответ
             return ResponseEntity
                     .status(201)
                     .body(Map.of("message", "Тіркелу сәтті өтті", "code", "REGISTERED", "user", sanitize(saved)));
