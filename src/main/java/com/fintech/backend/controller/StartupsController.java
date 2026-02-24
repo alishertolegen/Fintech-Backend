@@ -167,13 +167,19 @@ public class StartupsController {
                 }
 
                 // Обеспечим, что у стартапа есть metricsSnapshot объект
-                if (s.getMetricsSnapshot() == null) s.setMetricsSnapshot(new MetricsSnapshot());
                 MetricsSnapshot ms = s.getMetricsSnapshot();
+
+                if (ms == null) {
+                    ms = new MetricsSnapshot();
+                    s.setMetricsSnapshot(ms);
+                }
 
                 // Переписываем простые метрики если пришли
                 if (req.metricsSnapshot.getMrr() != null) ms.setMrr(req.metricsSnapshot.getMrr());
                 if (req.metricsSnapshot.getActiveUsers() != null) ms.setActiveUsers(req.metricsSnapshot.getActiveUsers());
-                if (req.metricsSnapshot.getBurnRate() != null) ms.setBurnRate(req.metricsSnapshot.getBurnRate());
+                if (req.metricsSnapshot.getBurnRate() != null) {
+                    ms.setBurnRate(req.metricsSnapshot.getBurnRate());
+                }
                 if (req.metricsSnapshot.getOther() != null) ms.setOther(req.metricsSnapshot.getOther());
 
                 // логика пересчёта valuation (используем текущий режим оценки стартапа)
