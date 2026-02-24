@@ -11,4 +11,6 @@ public interface ExitRequestRepository extends MongoRepository<ExitRequest, Stri
     List<ExitRequest> findByInvestmentId(String investmentId);
     List<ExitRequest> findByStatus(String status);
     List<ExitRequest> findByInvestmentIdAndStatus(String investmentId, String status);
+
+    List<ExitRequest> findByStartupId(String startupId);
 }

@@ -19,7 +19,17 @@ public class ExitRequest {
 
     private Instant createdAt;
 
+    private String startupId;
+
     // --- getters & setters ---
+
+    public String getStartupId() {
+        return startupId;
+    }
+
+    public void setStartupId(String startupId) {
+        this.startupId = startupId;
+    }
 
     public String getId() {
         return id;

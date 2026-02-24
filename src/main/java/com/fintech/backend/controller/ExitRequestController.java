@@ -21,10 +21,10 @@ public class ExitRequestController {
     @Autowired
     private InvestmentRepository investmentRepository;
 
-    // 🔹 Получить все exit requests
+    // 🔹 Получить exit requests
     @GetMapping
-    public List<ExitRequest> getAll() {
-        return repository.findAll();
+    public List<ExitRequest> getByStartup(@RequestParam String startupId) {
+        return repository.findByStartupId(startupId);
     }
 
     // 🔹 Получить по investmentId
@@ -50,7 +50,7 @@ public class ExitRequestController {
         request.setStatus("PENDING");
         request.setPaymentStatus("PENDING");
         request.setCreatedAt(Instant.now());
-
+        request.setStartupId(inv.getStartupId());
         return repository.save(request);
     }
 
