@@ -2,6 +2,9 @@ package com.fintech.backend.controller;
 
 import com.fintech.backend.model.Startup;
 import com.fintech.backend.model.Startup.MetricsSnapshot;
+import com.fintech.backend.model.StartupMetric;
+import com.fintech.backend.repository.InvestmentRepository;
+import com.fintech.backend.repository.StartupMetricsRepository;
 import com.fintech.backend.repository.StartupsRepository;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -17,9 +20,16 @@ import java.util.stream.Collectors;
 public class StartupsController {
 
     private final StartupsRepository repo;
+    private final InvestmentRepository investmentRepo;
+    private final StartupMetricsRepository metricsRepo;
 
-    public StartupsController(StartupsRepository repo) {
+    // Обратите внимание: добавлен метрик-репозиторий в конструктор
+    public StartupsController(StartupsRepository repo,
+                              InvestmentRepository investmentRepo,
+                              StartupMetricsRepository metricsRepo) {
         this.repo = repo;
+        this.investmentRepo = investmentRepo;
+        this.metricsRepo = metricsRepo;
     }
 
     // DTO для создания/обновления
@@ -125,30 +135,86 @@ public class StartupsController {
     @PutMapping("/{id}")
     public ResponseEntity<?> update(@PathVariable String id, @RequestBody StartupRequest req) {
         return repo.findById(id).map(s -> {
-            if (req.name != null) s.setName(req.name);
-            if (req.slug != null && !req.slug.isBlank()) {
-                String newSlug = req.slug.trim().toLowerCase();
-                if (!newSlug.equals(s.getSlug())) {
-                    String baseSlug = newSlug;
-                    int suffix = 0;
-                    while (repo.existsBySlug(newSlug)) {
-                        suffix++;
-                        newSlug = baseSlug + "-" + suffix;
-                    }
-                    s.setSlug(newSlug);
-                }
+            // 1. Проверка владельца (простейшая для MVP)
+            if (req.founderId != null && !req.founderId.equals(s.getFounderId())) {
+                return ResponseEntity.status(403).body(Map.of("error", "not owner"));
             }
+
+            // 2. Проверка: есть ли инвестиции
+            boolean hasInvestments = !investmentRepo.findByStartupId(s.getId()).isEmpty();
+
+            // --- ОБЫЧНЫЕ ПОЛЯ ---
+            if (req.name != null) s.setName(req.name);
             if (req.stage != null) s.setStage(req.stage);
             if (req.industry != null) s.setIndustry(req.industry);
             if (req.shortPitch != null) s.setShortPitch(req.shortPitch);
             if (req.description != null) s.setDescription(req.description);
             if (req.website != null) s.setWebsite(req.website);
             if (req.logoUrl != null) s.setLogoUrl(req.logoUrl);
-            if (req.metricsSnapshot != null) s.setMetricsSnapshot(req.metricsSnapshot);
             if (req.attachments != null) s.setAttachments(req.attachments);
             if (req.visibility != null) s.setVisibility(req.visibility);
-            if (req.valuationMode != null)
+
+            // --- ВАЖНАЯ ЛОГИКА (valuation + сохранение метрик в отдельную коллекцию) ---
+            if (req.metricsSnapshot != null) {
+                Double newPre = req.metricsSnapshot.getValuationPreMoney();
+                Double newPost = req.metricsSnapshot.getValuationPostMoney();
+
+                // ❗ если уже есть инвестиции → запрещаем менять valuation-поля
+                if (hasInvestments && (newPre != null || newPost != null)) {
+                    return ResponseEntity.badRequest().body(
+                            Map.of("error", "cannot change valuation after investments")
+                    );
+                }
+
+                // Обеспечим, что у стартапа есть metricsSnapshot объект
+                if (s.getMetricsSnapshot() == null) s.setMetricsSnapshot(new MetricsSnapshot());
+                MetricsSnapshot ms = s.getMetricsSnapshot();
+
+                // Переписываем простые метрики если пришли
+                if (req.metricsSnapshot.getMrr() != null) ms.setMrr(req.metricsSnapshot.getMrr());
+                if (req.metricsSnapshot.getActiveUsers() != null) ms.setActiveUsers(req.metricsSnapshot.getActiveUsers());
+                if (req.metricsSnapshot.getBurnRate() != null) ms.setBurnRate(req.metricsSnapshot.getBurnRate());
+                if (req.metricsSnapshot.getOther() != null) ms.setOther(req.metricsSnapshot.getOther());
+
+                // логика пересчёта valuation (используем текущий режим оценки стартапа)
+                String effectiveMode = (req.valuationMode != null) ? req.valuationMode : s.getValuationMode();
+                if ("pre".equals(effectiveMode) && newPre != null) {
+                    ms.setValuationPreMoney(newPre);
+                    // post можно оставить как есть или рассчитывать, пока оставляем без изменений
+                } else if ("post".equals(effectiveMode) && newPost != null) {
+                    ms.setValuationPostMoney(newPost);
+                }
+
+                // Сохраняем отдельную запись в коллекции startup_metrics — snapshot истории
+                try {
+                    StartupMetric metric = new StartupMetric();
+                    metric.setStartupId(s.getId());
+                    metric.setDate(Instant.now());
+                    metric.setMrr(ms.getMrr());
+                    metric.setActiveUsers(ms.getActiveUsers());
+                    metric.setBurnRate(ms.getBurnRate());
+                    metric.setValuationPreMoney(ms.getValuationPreMoney());
+                    metric.setValuationPostMoney(ms.getValuationPostMoney());
+                    metric.setOther(ms.getOther());
+                    metric.setCreatedAt(Instant.now());
+                    metric.setUpdatedAt(metric.getCreatedAt());
+                    metricsRepo.save(metric);
+                } catch (Exception ex) {
+                    // Не критично — логировать по желанию, но не мешаем основному сохранению.
+                    // Можно вернуть ошибку, если хотите строгую консистентность.
+                    System.err.println("Failed to save startup metric: " + ex.getMessage());
+                }
+            }
+
+            // режим оценки
+            if (req.valuationMode != null) {
+                if (hasInvestments) {
+                    return ResponseEntity.badRequest().body(
+                            Map.of("error", "cannot change valuation mode after investments")
+                    );
+                }
                 s.setValuationMode(req.valuationMode);
+            }
 
             s.setUpdatedAt(Instant.now());
             Startup saved = repo.save(s);

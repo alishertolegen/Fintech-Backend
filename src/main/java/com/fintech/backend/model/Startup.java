@@ -6,7 +6,7 @@ import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
 import java.util.List;
-
+import java.util.Map;
 @Document(collection = "startups")
 public class Startup {
 
@@ -40,33 +40,65 @@ public class Startup {
     public Startup() {}
 
     public static class MetricsSnapshot {
+
         private Double mrr;
-        private Integer users;
-        private Double valuationPreMoney;   // добавить
-        private Double valuationPostMoney;  // добавить
+
+        // Было users → добавим activeUsers для совместимости
+        private Integer users;          // старое поле
+        private Integer activeUsers;    // новое поле (для контроллера)
+
+        private Double burnRate;        // новое поле
+
+        private Double valuationPreMoney;
+        private Double valuationPostMoney;
+
+        private Map<String, Object> other; // новое поле (произвольные метрики)
 
         public MetricsSnapshot() {}
 
         public MetricsSnapshot(Double mrr, Integer users) {
             this.mrr = mrr;
             this.users = users;
+            this.activeUsers = users; // синхронизация
         }
 
-        // Дополнительный конструктор для всех полей
-        public MetricsSnapshot(Double mrr, Integer users, Double valuationPreMoney, Double valuationPostMoney) {
+        public MetricsSnapshot(Double mrr,
+                               Integer users,
+                               Double valuationPreMoney,
+                               Double valuationPostMoney) {
             this.mrr = mrr;
             this.users = users;
+            this.activeUsers = users;
             this.valuationPreMoney = valuationPreMoney;
             this.valuationPostMoney = valuationPostMoney;
         }
 
+        // --- MRR ---
         public Double getMrr() { return mrr; }
         public void setMrr(Double mrr) { this.mrr = mrr; }
 
+        // --- Users (старое поле) ---
         public Integer getUsers() { return users; }
-        public void setUsers(Integer users) { this.users = users; }
+        public void setUsers(Integer users) {
+            this.users = users;
+            this.activeUsers = users; // держим синхрон
+        }
 
-        // Новые геттеры/сеттеры
+        // --- ActiveUsers (новое поле) ---
+        public Integer getActiveUsers() {
+            return activeUsers != null ? activeUsers : users;
+        }
+
+        public void setActiveUsers(Integer activeUsers) {
+            this.activeUsers = activeUsers;
+            this.users = activeUsers; // синхрон с legacy полем
+        }
+
+        // --- Burn Rate ---
+        public Double getBurnRate() { return burnRate; }
+        public void setBurnRate(Double burnRate) { this.burnRate = burnRate; }
+
+        // --- Valuation ---
         public Double getValuationPreMoney() { return valuationPreMoney; }
         public void setValuationPreMoney(Double valuationPreMoney) {
             this.valuationPreMoney = valuationPreMoney;
@@ -76,6 +108,10 @@ public class Startup {
         public void setValuationPostMoney(Double valuationPostMoney) {
             this.valuationPostMoney = valuationPostMoney;
         }
+
+        // --- Other ---
+        public Map<String, Object> getOther() { return other; }
+        public void setOther(Map<String, Object> other) { this.other = other; }
     }
 
     // --- getters / setters ---
