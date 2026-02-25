@@ -12,10 +12,12 @@ import java.time.Instant;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 @RestController
 @RequestMapping("/api/users")
 public class UserController {
@@ -23,14 +25,14 @@ public class UserController {
     private final UserRepository repo;
     private final InvestorRepository investorRepository;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
-    private final JwtUtil jwtUtil; // <-- добавлено
+    private final JwtUtil jwtUtil;
     private static final Logger log = LoggerFactory.getLogger(UserController.class);
+
     public UserController(UserRepository repo, JwtUtil jwtUtil, InvestorRepository investorRepository) {
         this.repo = repo;
-        this.jwtUtil = jwtUtil; // <-- назначаем
+        this.jwtUtil = jwtUtil;
         this.investorRepository = investorRepository;
     }
-
 
     // ---- DTOs (вложенные, чтобы не создавать доп. файлов) ----
     public static class CreateUserRequest {
@@ -75,11 +77,24 @@ public class UserController {
         return u;
     }
 
+    private ResponseEntity<?> unauthorizedResponse(String message, String code) {
+        return ResponseEntity.status(401).body(Map.of("message", message, "code", code));
+    }
+
+    private ResponseEntity<?> invalidTokenResponse() {
+        return ResponseEntity.status(401).body(Map.of("message", "Токен жарамсыз немесе мерзімі өткен", "code", "INVALID_TOKEN"));
+    }
+
+    private Optional<String> extractTokenFromHeader(String authHeader) {
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) return Optional.empty();
+        return Optional.of(authHeader.substring(7));
+    }
+
     // ---- Endpoints ----
 
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody CreateUserRequest req) {
-        log.info("Register attempt for email: {}", req.email);
+        log.info("Register attempt for email: {}", req == null ? null : req.email);
         if (req == null || req.email == null || req.password == null) {
             return ResponseEntity
                     .badRequest()
@@ -216,15 +231,48 @@ public class UserController {
         return ResponseEntity.ok(sanitized);
     }
 
+    /**
+     * Обновление любого пользователя (требует авторизации).
+     * Допускается только:
+     *  - админ (role == "admin") — может править любого пользователя и менять isVerified
+     *  - владелец (id в токене == id в пути) — может править собственный профиль, но не isVerified
+     */
     @PutMapping("/{id}")
-    public ResponseEntity<?> update(@PathVariable String id, @RequestBody UpdateUserRequest req) {
-        log.info("Updating user id={}", id);
+    public ResponseEntity<?> update(
+            @PathVariable String id,
+            @RequestHeader(name = "Authorization", required = false) String authHeader,
+            @RequestBody UpdateUserRequest req) {
+
+        log.info("Updating user id={} (requested)", id);
+
+        var maybeToken = extractTokenFromHeader(authHeader);
+        if (maybeToken.isEmpty()) {
+            return unauthorizedResponse("Authorization header жетіспейді немесе дұрыс емес", "MISSING_AUTH");
+        }
+        String token = maybeToken.get();
+        if (!jwtUtil.validateToken(token)) {
+            return invalidTokenResponse();
+        }
+        String requesterId = jwtUtil.getUserIdFromToken(token);
+        Optional<User> maybeRequester = repo.findById(requesterId);
+        if (maybeRequester.isEmpty()) {
+            return ResponseEntity.status(401).body(Map.of("message", "Сұраушы пайдаланушы табылмады", "code", "REQUESTER_NOT_FOUND"));
+        }
+        User requester = maybeRequester.get();
+        boolean isAdmin = "admin".equalsIgnoreCase(requester.getRole());
+
+        if (!isAdmin && !requesterId.equals(id)) {
+            return ResponseEntity.status(403).body(Map.of("message", "Сіз басқа қолданушыны өзгерте алмайсыз", "code", "FORBIDDEN"));
+        }
+
         return repo.findById(id).map(u -> {
             if (req.name != null) u.setName(req.name);
             if (req.company != null) u.setCompany(req.company);
             if (req.bio != null) u.setBio(req.bio);
             if (req.avatarUrl != null) u.setAvatarUrl(req.avatarUrl);
-            if (req.isVerified != null) u.setIsVerified(req.isVerified);
+            // isVerified может менять только админ
+            if (req.isVerified != null && isAdmin) u.setIsVerified(req.isVerified);
+
             if (u.getMeta() == null) u.setMeta(new User.Meta(req.phone, req.location));
             else {
                 if (req.phone != null) u.getMeta().setPhone(req.phone);
@@ -236,6 +284,48 @@ public class UserController {
         }).orElseGet(() -> ResponseEntity.notFound().build());
     }
 
+    /**
+     * Обновление своего профиля по токену (без передачи id в пути).
+     * Безопаснее и удобнее для фронтенда: PUT /api/users/me
+     */
+    @PutMapping("/me")
+    public ResponseEntity<?> updateMe(
+            @RequestHeader(name = "Authorization", required = false) String authHeader,
+            @RequestBody UpdateUserRequest req) {
+
+        log.info("Updating current user (me)");
+
+        var maybeToken = extractTokenFromHeader(authHeader);
+        if (maybeToken.isEmpty()) {
+            return unauthorizedResponse("Authorization header жетіспейді немесе дұрыс емес", "MISSING_AUTH");
+        }
+        String token = maybeToken.get();
+        if (!jwtUtil.validateToken(token)) {
+            return invalidTokenResponse();
+        }
+        String currentUserId = jwtUtil.getUserIdFromToken(token);
+
+        Optional<User> maybeUser = repo.findById(currentUserId);
+        if (maybeUser.isEmpty()) {
+            return ResponseEntity.status(401).body(Map.of("message", "Пайдаланушы табылмады", "code", "USER_NOT_FOUND"));
+        }
+
+        User u = maybeUser.get();
+        if (req.name != null) u.setName(req.name);
+        if (req.company != null) u.setCompany(req.company);
+        if (req.bio != null) u.setBio(req.bio);
+        if (req.avatarUrl != null) u.setAvatarUrl(req.avatarUrl);
+        // isVerified менять через /me нельзя — только админ через PUT /{id}
+        if (u.getMeta() == null) u.setMeta(new User.Meta(req.phone, req.location));
+        else {
+            if (req.phone != null) u.getMeta().setPhone(req.phone);
+            if (req.location != null) u.getMeta().setLocation(req.location);
+        }
+        u.setUpdatedAt(Instant.now());
+        User saved = repo.save(u);
+        return ResponseEntity.ok(sanitize(saved));
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<?> delete(@PathVariable String id) {
         if (!repo.existsById(id)) return ResponseEntity.notFound().build();
@@ -244,18 +334,17 @@ public class UserController {
         return ResponseEntity.noContent().build();
     }
 
-    // ---- New: current user ----
+    // ---- Current user (read) ----
     @GetMapping("/me")
     public ResponseEntity<?> me(@RequestHeader(name = "Authorization", required = false) String authHeader) {
         log.info("Fetching current user from token");
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            return ResponseEntity.status(401)
-                    .body(Map.of("message", "Authorization header жетіспейді немесе дұрыс емес", "code", "MISSING_AUTH"));
+        var maybeToken = extractTokenFromHeader(authHeader);
+        if (maybeToken.isEmpty()) {
+            return unauthorizedResponse("Authorization header жетіспейді немесе дұрыс емес", "MISSING_AUTH");
         }
-        String token = authHeader.substring(7);
+        String token = maybeToken.get();
         if (!jwtUtil.validateToken(token)) {
-            return ResponseEntity.status(401)
-                    .body(Map.of("message", "Токен жарамсыз немесе мерзімі өткен", "code", "INVALID_TOKEN"));
+            return invalidTokenResponse();
         }
         String userId = jwtUtil.getUserIdFromToken(token);
 
@@ -267,6 +356,5 @@ public class UserController {
         User u = opt.get();
         return ResponseEntity.ok(sanitize(u));
     }
-
 
 }
