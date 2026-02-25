@@ -14,7 +14,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 @RestController
 @RequestMapping("/api/users")
 public class UserController {
@@ -23,7 +24,7 @@ public class UserController {
     private final InvestorRepository investorRepository;
     private final BCryptPasswordEncoder encoder = new BCryptPasswordEncoder();
     private final JwtUtil jwtUtil; // <-- добавлено
-
+    private static final Logger log = LoggerFactory.getLogger(UserController.class);
     public UserController(UserRepository repo, JwtUtil jwtUtil, InvestorRepository investorRepository) {
         this.repo = repo;
         this.jwtUtil = jwtUtil; // <-- назначаем
@@ -78,6 +79,7 @@ public class UserController {
 
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody CreateUserRequest req) {
+        log.info("Register attempt for email: {}", req.email);
         if (req == null || req.email == null || req.password == null) {
             return ResponseEntity
                     .badRequest()
@@ -89,6 +91,7 @@ public class UserController {
         // Простейшая валидация email
         Pattern emailPattern = Pattern.compile("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$");
         if (!emailPattern.matcher(email).matches()) {
+            log.warn("Invalid email format: {}", email);
             return ResponseEntity
                     .badRequest()
                     .body(Map.of("message", "Электрондық пошта форматы дұрыс емес", "code", "INVALID_EMAIL"));
@@ -102,6 +105,7 @@ public class UserController {
         }
 
         if (repo.existsByEmail(email)) {
+            log.warn("Email already exists: {}", email);
             return ResponseEntity
                     .status(409)
                     .body(Map.of("message", "Бұл email бұрыннан тіркелген", "code", "EMAIL_EXISTS"));
@@ -145,7 +149,7 @@ public class UserController {
                     inv.setCreatedAt(Instant.now());
                     inv.setUpdatedAt(Instant.now());
                     Investor savedInv = investorRepository.save(inv);
-
+                    log.info("User registered successfully: id={}, email={}", saved.getId(), email);
                     // Возвращаем единый объект: message + user + investor
                     return ResponseEntity
                             .status(201)
@@ -167,6 +171,7 @@ public class UserController {
                                 .status(500)
                                 .body(Map.of("message", "Пайдаланушы сақталды, бірақ инвестор профилін жасау сәтсіз аяқталды. Роллбек сәтсіз.", "code", "INVESTOR_CREATE_ROLLBACK_FAILED"));
                     }
+                    log.error("Investor profile creation failed for userId={}", saved.getId(), invEx);
                     return ResponseEntity
                             .status(500)
                             .body(Map.of("message", "Инвестор профилін жасау кезінде қате орын алды", "code", "INVESTOR_CREATE_FAILED"));
@@ -174,6 +179,7 @@ public class UserController {
             }
 
             // Без инвестор-профиля — обычный ответ
+            log.info("User registered successfully: id={}, email={}", saved.getId(), email);
             return ResponseEntity
                     .status(201)
                     .body(Map.of("message", "Тіркелу сәтті өтті", "code", "REGISTERED", "user", sanitize(saved)));
@@ -185,6 +191,7 @@ public class UserController {
         } catch (Exception ex) {
             // Логируем на сервере (System.err или логгер)
             ex.printStackTrace();
+            log.error("Server error during registration", ex);
             return ResponseEntity
                     .status(500)
                     .body(Map.of("message", "Серверде қате орын алды", "code", "SERVER_ERROR"));
@@ -193,6 +200,7 @@ public class UserController {
 
     @GetMapping("/{id}")
     public ResponseEntity<?> getById(@PathVariable String id) {
+        log.info("Fetching user by id={}", id);
         return repo.findById(id)
                 .map(u -> ResponseEntity.ok(sanitize(u)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
@@ -212,6 +220,7 @@ public class UserController {
 
     @PutMapping("/{id}")
     public ResponseEntity<?> update(@PathVariable String id, @RequestBody UpdateUserRequest req) {
+        log.info("Updating user id={}", id);
         return repo.findById(id).map(u -> {
             if (req.name != null) u.setName(req.name);
             if (req.company != null) u.setCompany(req.company);
@@ -232,6 +241,7 @@ public class UserController {
     @DeleteMapping("/{id}")
     public ResponseEntity<?> delete(@PathVariable String id) {
         if (!repo.existsById(id)) return ResponseEntity.notFound().build();
+        log.info("Deleting user id={}", id);
         repo.deleteById(id);
         return ResponseEntity.noContent().build();
     }
@@ -239,6 +249,7 @@ public class UserController {
     // ---- New: current user ----
     @GetMapping("/me")
     public ResponseEntity<?> me(@RequestHeader(name = "Authorization", required = false) String authHeader) {
+        log.info("Fetching current user from token");
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             return ResponseEntity.status(401)
                     .body(Map.of("message", "Authorization header жетіспейді немесе дұрыс емес", "code", "MISSING_AUTH"));
