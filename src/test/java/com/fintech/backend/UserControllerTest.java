@@ -35,8 +35,6 @@ class UserControllerTest {
     @InjectMocks
     private UserController controller;
 
-    // -------- REGISTER --------
-
     @Test
     void register_success() {
         UserController.CreateUserRequest req = new UserController.CreateUserRequest();
@@ -92,8 +90,6 @@ class UserControllerTest {
         assertEquals(400, response.getStatusCodeValue());
     }
 
-    // -------- GET BY ID --------
-
     @Test
     void getById_found() {
         User user = new User();
@@ -114,8 +110,6 @@ class UserControllerTest {
 
         assertEquals(404, response.getStatusCodeValue());
     }
-
-    // -------- ME --------
 
     @Test
     void me_success() {

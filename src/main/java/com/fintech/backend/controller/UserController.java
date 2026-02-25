@@ -88,7 +88,6 @@ public class UserController {
 
         String email = req.email.trim().toLowerCase();
 
-        // Простейшая валидация email
         Pattern emailPattern = Pattern.compile("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+$");
         if (!emailPattern.matcher(email).matches()) {
             log.warn("Invalid email format: {}", email);
@@ -97,7 +96,6 @@ public class UserController {
                     .body(Map.of("message", "Электрондық пошта форматы дұрыс емес", "code", "INVALID_EMAIL"));
         }
 
-        // Минимальные требования к паролю
         if (req.password.length() < 8) {
             return ResponseEntity
                     .badRequest()
