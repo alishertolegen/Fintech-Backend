@@ -6,8 +6,11 @@ import com.fintech.backend.model.StartupMetric;
 import com.fintech.backend.repository.InvestmentRepository;
 import com.fintech.backend.repository.StartupMetricsRepository;
 import com.fintech.backend.repository.StartupsRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Instant;
 import java.text.Normalizer;
@@ -17,6 +20,7 @@ import java.util.stream.Collectors;
 @RestController
 @RequestMapping("/api/startups")
 @CrossOrigin(origins = "http://localhost:5173")
+
 public class StartupsController {
 
     private final StartupsRepository repo;
@@ -31,7 +35,11 @@ public class StartupsController {
         this.investmentRepo = investmentRepo;
         this.metricsRepo = metricsRepo;
     }
+    @Autowired
+    private SupabaseStorageService storageService;
 
+    @Autowired
+    private JwtUtil jwtUtil;
     // DTO для создания/обновления
     public static class StartupRequest {
         public String name;
@@ -233,5 +241,36 @@ public class StartupsController {
         if (!repo.existsById(id)) return ResponseEntity.notFound().build();
         repo.deleteById(id);
         return ResponseEntity.noContent().build();
+    }
+    @PostMapping(value = "/{id}/logo", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> uploadLogo(
+            @PathVariable String id,
+            @RequestHeader(name = "Authorization", required = false) String authHeader,
+            @RequestParam("file") MultipartFile file) {
+
+        // Проверка токена
+        if (authHeader == null || !authHeader.startsWith("Bearer "))
+            return ResponseEntity.status(401).body(Map.of("message", "MISSING_AUTH"));
+        String token = authHeader.substring(7);
+        if (!jwtUtil.validateToken(token))
+            return ResponseEntity.status(401).body(Map.of("message", "INVALID_TOKEN"));
+
+        String currentUserId = jwtUtil.getUserIdFromToken(token);
+
+        return repo.findById(id).map(s -> {
+            // Только владелец может менять логотип
+            if (!currentUserId.equals(s.getFounderId()))
+                return ResponseEntity.status(403).body(Map.of("message", "FORBIDDEN"));
+
+            try {
+                String publicUrl = storageService.uploadAvatar(file, "startup-" + id);
+                s.setLogoUrl(publicUrl);
+                s.setUpdatedAt(Instant.now());
+                Startup saved = repo.save(s);
+                return ResponseEntity.ok(saved);
+            } catch (Exception ex) {
+                return ResponseEntity.status(500).body(Map.of("message", "LOGO_UPLOAD_FAILED"));
+            }
+        }).orElseGet(() -> ResponseEntity.notFound().build());
     }
 }
