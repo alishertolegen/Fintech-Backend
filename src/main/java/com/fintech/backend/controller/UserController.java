@@ -4,7 +4,9 @@ import com.fintech.backend.model.User;
 import com.fintech.backend.model.Investor;
 import com.fintech.backend.repository.UserRepository;
 import com.fintech.backend.repository.InvestorRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.web.bind.annotation.*;
@@ -17,6 +19,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/users")
@@ -356,5 +359,33 @@ public class UserController {
         User u = opt.get();
         return ResponseEntity.ok(sanitize(u));
     }
+    @Autowired
+    private SupabaseStorageService storageService;
 
+    @PostMapping(value = "/me/avatar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> uploadAvatar(
+            @RequestHeader(name = "Authorization", required = false) String authHeader,
+            @RequestParam("file") MultipartFile file) {
+
+        var maybeToken = extractTokenFromHeader(authHeader);
+        if (maybeToken.isEmpty()) return unauthorizedResponse("Authorization header жетіспейді немесе дұрыс емес", "MISSING_AUTH");
+        String token = maybeToken.get();
+        if (!jwtUtil.validateToken(token)) return invalidTokenResponse();
+
+        String currentUserId = jwtUtil.getUserIdFromToken(token);
+        Optional<User> maybeUser = repo.findById(currentUserId);
+        if (maybeUser.isEmpty()) return ResponseEntity.status(401).body(Map.of("message", "Пайдаланушы табылмады", "code", "USER_NOT_FOUND"));
+
+        try {
+            String publicUrl = storageService.uploadAvatar(file, currentUserId);
+            User u = maybeUser.get();
+            u.setAvatarUrl(publicUrl);
+            u.setUpdatedAt(Instant.now());
+            User saved = repo.save(u);
+            return ResponseEntity.ok(sanitize(saved));
+        } catch (Exception ex) {
+            log.error("Avatar upload failed for userId={}", currentUserId, ex);
+            return ResponseEntity.status(500).body(Map.of("message", "Аватар жүктеу кезінде қате", "code", "AVATAR_UPLOAD_FAILED"));
+        }
+    }
 }
