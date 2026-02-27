@@ -36,7 +36,7 @@ public class Startup {
     private String visibility;         // "public" | "private"
 
     private String valuationMode; // "pre" или "post"
-
+    private List<String> images;
     public Startup() {}
 
     public static class MetricsSnapshot {
@@ -166,4 +166,7 @@ public class Startup {
 
     public String getVisibility() { return visibility; }
     public void setVisibility(String visibility) { this.visibility = visibility; }
+
+    public List<String> getImages() { return images; }
+    public void setImages(List<String> images) { this.images = images; }
 }

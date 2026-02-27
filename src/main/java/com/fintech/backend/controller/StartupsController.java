@@ -11,7 +11,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-
+import java.util.ArrayList;
 import java.time.Instant;
 import java.text.Normalizer;
 import java.util.*;
@@ -55,6 +55,7 @@ public class StartupsController {
         public List<String> attachments;
         public String visibility;
         public String valuationMode;
+        public List<String> images;
     }
 
     // Утилита: генерируем slug из name (simple)
@@ -135,6 +136,7 @@ public class StartupsController {
         s.setValuationMode(
                 req.valuationMode == null ? "pre" : req.valuationMode
         );
+        s.setImages(req.images);
 
         Startup saved = repo.save(s);
         return ResponseEntity.ok(saved);
@@ -161,7 +163,7 @@ public class StartupsController {
             if (req.logoUrl != null) s.setLogoUrl(req.logoUrl);
             if (req.attachments != null) s.setAttachments(req.attachments);
             if (req.visibility != null) s.setVisibility(req.visibility);
-
+            if (req.images != null) s.setImages(req.images);
             // --- ВАЖНАЯ ЛОГИКА (valuation + сохранение метрик в отдельную коллекцию) ---
             if (req.metricsSnapshot != null) {
                 Double newPre = req.metricsSnapshot.getValuationPreMoney();
@@ -271,6 +273,62 @@ public class StartupsController {
             } catch (Exception ex) {
                 return ResponseEntity.status(500).body(Map.of("message", "LOGO_UPLOAD_FAILED"));
             }
+        }).orElseGet(() -> ResponseEntity.notFound().build());
+    }
+    @PostMapping(value = "/{id}/images", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> uploadImage(
+            @PathVariable String id,
+            @RequestHeader(name = "Authorization", required = false) String authHeader,
+            @RequestParam("file") MultipartFile file) {
+
+        if (authHeader == null || !authHeader.startsWith("Bearer "))
+            return ResponseEntity.status(401).body(Map.of("message", "MISSING_AUTH"));
+        String token = authHeader.substring(7);
+        if (!jwtUtil.validateToken(token))
+            return ResponseEntity.status(401).body(Map.of("message", "INVALID_TOKEN"));
+
+        String currentUserId = jwtUtil.getUserIdFromToken(token);
+
+        return repo.findById(id).map(s -> {
+            if (!currentUserId.equals(s.getFounderId()))
+                return ResponseEntity.status(403).body(Map.of("message", "FORBIDDEN"));
+            try {
+                String publicUrl = storageService.uploadAvatar(file, "startup-img-" + id + "-" + System.currentTimeMillis());
+                List<String> imgs = s.getImages() == null ? new ArrayList<>() : new ArrayList<>(s.getImages());
+                imgs.add(publicUrl);
+                s.setImages(imgs);
+                s.setUpdatedAt(Instant.now());
+                Startup saved = repo.save(s);
+                return ResponseEntity.ok(Map.of("url", publicUrl, "images", saved.getImages()));
+            } catch (Exception ex) {
+                return ResponseEntity.status(500).body(Map.of("message", "IMAGE_UPLOAD_FAILED"));
+            }
+        }).orElseGet(() -> ResponseEntity.notFound().build());
+    }
+
+    @DeleteMapping("/{id}/images")
+    public ResponseEntity<?> deleteImage(
+            @PathVariable String id,
+            @RequestHeader(name = "Authorization", required = false) String authHeader,
+            @RequestParam("url") String url) {
+
+        if (authHeader == null || !authHeader.startsWith("Bearer "))
+            return ResponseEntity.status(401).body(Map.of("message", "MISSING_AUTH"));
+        String token = authHeader.substring(7);
+        if (!jwtUtil.validateToken(token))
+            return ResponseEntity.status(401).body(Map.of("message", "INVALID_TOKEN"));
+
+        String currentUserId = jwtUtil.getUserIdFromToken(token);
+
+        return repo.findById(id).map(s -> {
+            if (!currentUserId.equals(s.getFounderId()))
+                return ResponseEntity.status(403).body(Map.of("message", "FORBIDDEN"));
+            List<String> imgs = s.getImages() == null ? new ArrayList<>() : new ArrayList<>(s.getImages());
+            imgs.remove(url);
+            s.setImages(imgs);
+            s.setUpdatedAt(Instant.now());
+            Startup saved = repo.save(s);
+            return ResponseEntity.ok(Map.of("images", saved.getImages()));
         }).orElseGet(() -> ResponseEntity.notFound().build());
     }
 }
